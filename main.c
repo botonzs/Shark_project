@@ -153,7 +153,13 @@ void Clutch_Servo(int32_t Degree)//kuplung szabályozó szervó beállítása
 //Szevó függvények vége =======================================================================================================================================================
 
 //millis:
-
+bool millis(int32_t StartWait, int32_t WaitLength)
+{//Bemenet, hogy mikor kezdtük el a számolást, és hogy mennyi ideig számoljon
+    if((__HAL_TIM_GET_COUNTER(&htim4) + __HAL_TIM_GET_AUTORELOAD(&htim4) - StartWait) % __HAL_TIM_GET_AUTORELOAD(&htim4) > WaitLength){//__HAL_TIM_GET_AUTORELOAD(&htim4) asszem az autoreloadot adja vissza de nem száz
+    return 1;
+    }
+    else return 0;
+}
 //
 
 //Gombok =======================================================================================================================================================
