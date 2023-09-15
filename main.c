@@ -89,6 +89,9 @@ static void MX_ADC1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+#define FekpadTest
+//#define MotorVezerles
+
 //Fékpad változók:
 int fekpadState=1;
 int FekapadSzervoDeltaFi=0;
@@ -120,12 +123,16 @@ int32_t currentMotPos;        //ebbe a pozícióba állítjuk a motor szervót f
 #define nDK 100        //dekompresszort ezen a sebességen zárjuk be megint
 #define nBef 200       //befecskendezés ezen a fordulatszámon indul el
 #define nInd 700      //indítómotor ezen a sebességen áll meg
-#define nMax 3500            //maximum motorsebesség
+#define nMax 3000            //maximum motorsebesség
 #define nVit 400            //ezen a kerék fordulatszámon azt mondjuk hogy már vitorlázunk
 
 
 //uint32_t counter=0;
 #define DK_open_wait_millisec 500
+uint32_t StartWait_Dk=0;
+uint32_t StartWait_EngineStart_failed=0;
+uint32_t Wait_Dk_millis=500;
+uint32_t Wait__EngineStart_failed_millis=8000;
 
 //Szervó függvények: =======================================================================================================================================================
 #define ServoMin 60
@@ -153,7 +160,17 @@ void Clutch_Servo(int32_t Degree)//kuplung szabályozó szervó beállítása
 //Szevó függvények vége =======================================================================================================================================================
 
 //millis:
-
+// Clock frek= 84MHz, prescale=33600 -> Timer frek= 84MHz/33600 = 2500Hz
+//Autoreload=60k -> 60k/2500=24 sec
+//WaitLength: [ms]
+//StartWait=(TIM4->CNT);
+bool Tim4_Wait_Millis(int32_t StartWait, int32_t WaitLength)
+{//Bemenet, hogy mikor kezdtük el a számolást, és hogy mennyi ideig számoljon
+    if(((TIM4->CNT) + __HAL_TIM_GET_AUTORELOAD(&htim4) - StartWait) % __HAL_TIM_GET_AUTORELOAD(&htim4) > WaitLength*2.5){//__HAL_TIM_GET_AUTORELOAD(&htim4) asszem az autoreloadot adja vissza de nem száz
+    return 1;
+    }
+    else return 0;
+}
 //
 
 //Gombok =======================================================================================================================================================
@@ -186,17 +203,17 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
 int szogem=0;
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim){
 	//Szögsebesség mérés
-	nMot = (__HAL_TIM_GET_COUNTER(&htim2))*1200/1024; //egy fordulat 1024 jelet ad ki magából (256*4), és 50 ms-onként mérünk, de így 1/min-ben kapjuk meg (*1200)
-	nKer = (__HAL_TIM_GET_COUNTER(&htim1))*1200/1024; //egy fordulat 1024 jelet ad ki magából (256*4), és 50 ms-onként mérünk, de így 1/min-ben kapjuk meg (*1200)
+	//nMot = ((TIM2->CNT))*1200/1024; //egy fordulat 1024 jelet ad ki magából (256*4), és 50 ms-onként mérünk, de így 1/min-ben kapjuk meg (*1200)
+	nKer = ((TIM1->CNT))*1200/1024; //egy fordulat 1024 jelet ad ki magából (256*4), és 50 ms-onként mérünk, de így 1/min-ben kapjuk meg (*1200)
 	__HAL_TIM_SET_COUNTER(&htim5, 0);
 	__HAL_TIM_SET_COUNTER(&htim2, 0);
 	__HAL_TIM_SET_COUNTER(&htim1, 0);
 	//Szögsebesség mérés vége
 
 
-	HAL_GPIO_TogglePin(LD5_GPIO_Port, LD5_Pin);
-	HAL_GPIO_TogglePin(LD4_GPIO_Port, LD4_Pin);
-	HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
+	//HAL_GPIO_TogglePin(LD5_GPIO_Port, LD5_Pin);
+	//HAL_GPIO_TogglePin(LD4_GPIO_Port, LD4_Pin);
+	//HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
 
 	//Fékpad:
 /*
@@ -262,9 +279,10 @@ int main(void)
   HAL_ADC_Start(&hadc1);
   //Fékpad vége
 
- // HAL_TIM_Base_Start(&htim5);
+  HAL_TIM_Base_Start(&htim4);
   HAL_TIM_Base_Start_IT(&htim5);
 
+  //uint32_t StartWait=TIM4->CNT;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -272,43 +290,52 @@ int main(void)
   while (1)
   {
 	  //Tesztek:
-	  /*Decompressor_Servo(__HAL_TIM_GET_COUNTER(&htim1)/100);
-	 	  Clutch_Servo(__HAL_TIM_GET_COUNTER(&htim1)/100);
-	 sprintf(MSG, "Hello Dudes! Tracing X = %d\r\n", X);
-	 MSG= "Hello Dudes! Tracing X = %d\r\n", 5;
-	 	  */
+/*
+	  if(Tim4_Wait_Millis(StartWait, 20000)){
+		  HAL_GPIO_TogglePin(LD5_GPIO_Port, LD5_Pin);
+		  StartWait=TIM4->CNT;
+	  }
+	  */
 	  //Tesztek vége
 
 	  //Fékpad:
-
+#ifdef FekpadTest
 	  HAL_ADC_Start(&hadc1);
 	  HAL_ADC_PollForConversion(&hadc1, 1000);
 	  uint32_t value = HAL_ADC_GetValue(&hadc1);
 	  value=(int)value*0.043945;
 
+	  //Decompressor_Servo(value);
+	  //Clutch_Servo(value);
 	  Injection_Servo(value);
 	  sprintf(MSG,"szog:%d\n",value);
 	  HAL_UART_Transmit(&huart2, MSG, sizeof(MSG), 100);
-	  /*
+
 	  if(start_button==false)fekpadState=1;
 	  switch(fekpadState){
 	  case 1:
 
 		  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET);
 	  	  Decompressor_Servo(180);
-	  	  if(start_button==true)fekpadState=2;
+	  	  if(start_button==true){
+	  		  fekpadState=2;
+	  		StartWait_Dk=TIM4->CNT;
+	  	  }
 	  break;
 	  case 2:
 		  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET);
 		  Decompressor_Servo(90);
-	  	  HAL_Delay(500);
-	  	  fekpadState=3;
+	  	  if(Tim4_Wait_Millis(StartWait_Dk, Wait_Dk_millis)){
+	  		fekpadState=3;
+	  		StartWait_Dk=TIM4->CNT;
+	  	  }
 	  break;
 	  case 3:
 		  Decompressor_Servo(90);
 	  	  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);
-	  	  HAL_Delay(500);
-	  	  fekpadState=4;
+	  	  if(Tim4_Wait_Millis(StartWait_Dk, Wait_Dk_millis)){
+	  	  		fekpadState=4;
+	  	  }
 	  break;
 	  case 4:
 	  	  Decompressor_Servo(180);
@@ -317,19 +344,20 @@ int main(void)
 	  	  fekpadState=4;
 	  break;
 	  }
-*/
+#endif
 	 //Fékpad vége
 
 	 //Motorvezérlés:
-//TODO
-
-	   if(__HAL_TIM_GET_COUNTER(&htim12)>25000){//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-	   	   start_button=false;
-	   }
+#ifdef MotorVezerles
 	  //A tényleges állapotgép:
 	  	          //->
+	  	  HAL_ADC_Start(&hadc1);
+	  	  HAL_ADC_PollForConversion(&hadc1, 1000);
+	  	  nMot = HAL_ADC_GetValue(&hadc1);
+	  	  sprintf(MSG,"nMot:%d\n",nMot);
+	  		  HAL_UART_Transmit(&huart2, MSG, sizeof(MSG), 100);
 
-	  	      if (start_button == false) {
+	  	      if (start_button == false || nMot>nMax) {
 	  	          EnState = 1; //indítás állapotgépe
 	  	          ClState = 1; //kuplung állapotgépe
 	  	      }
@@ -342,8 +370,8 @@ int main(void)
 	  	              //->
 	  	              if (start_button == true){//ha a start gombot megnyomjuk
 	  	                  EnState = 2; //dekompresszor szelep nyit
-	  	                  __HAL_TIM_SET_COUNTER(&htim4, 0);
-	  	                  HAL_TIM_Base_Start(&htim4);
+	  	                StartWait_Dk=TIM4->CNT;
+	  	                StartWait_EngineStart_failed=TIM4->CNT;
 	  	              }
 	  	          break;
 	  	          //================================================================================
@@ -351,22 +379,33 @@ int main(void)
 	  	              Decompressor_Servo(DKopen);
 	  	              Injection_Servo(MotPosZero);
 	  	              //->
-	  	              if ((TIM4->CNT) > DK_open_wait_millisec) {//Várunk fél másodpercet
+	  	              if (Tim4_Wait_Millis(StartWait_Dk, Wait_Dk_millis)) {//Várunk fél másodpercet
 	  	                  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET); //indító motor bekapcsol
 	  	                  EnState = 3;//Motorpörgésre várunk
 	  	              }
 	  	          break;
 	  	          //================================================================================
+
 	  	          case 3: //Megvárjuk hogy az indító felpörgesse a motort
+	  	        	  Decompressor_Servo(DKopen);//bezárjuk a dekompresszort
+	  	        	  Injection_Servo(MotPosZero);
+	  	        	  //->
+	  	        	  if (nMot > nDK) { //Megvárjuk, hogy elérjük a befecskendezési fordulatot
+	  	        		  EnState = 4; //Befecskendezés
+	  	        	  }
+	  	          break;
+
+
+	  	          case 4: //Megvárjuk hogy az indító felpörgesse a motort
 	  	              Decompressor_Servo(DKclosed);//bezárjuk a dekompresszort
 	  	              Injection_Servo(MotPosZero);
 	  	              //->
 	  	              if (nMot > nBef) { //Megvárjuk, hogy elérjük a befecskendezési fordulatot
-	  	                  EnState = 4; //Befecskendezés
+	  	                  EnState = 5; //Befecskendezés
 	  	              }
 	  	          break;
 	  	          //================================================================================
-	  	          case 4: //elkezdődik a befecskendezés
+	  	          case 5: //elkezdődik a befecskendezés
 	  	              Decompressor_Servo(DKclosed);
 	  	              for (int ii = 0; ii < sizeof(fi)/sizeof(fi[0]); ii++) {
 	  	                  if (nMot > n[ii] && nMot < n[ii + 1]) {
@@ -378,11 +417,11 @@ int main(void)
 	  	              //->
 	  	              if (nMot > nInd) {
 	  	                  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET); //indító motor kikapcsol
-	  	                  EnState = 5;
+	  	                  EnState = 6;
 	  	              }
 	  	          break;
 	  	          //================================================================================
-	  	          case 5: //elindult a motor, indító leáll
+	  	          case 6: //elindult a motor, indító leáll
 	  	              Decompressor_Servo(DKclosed);
 	  	              for (int i = 0; i < sizeof(fi) / sizeof(fi[0]); i++) {
 	  	                  if (nMot > n[i] && nMot < n[i + 1]) {
@@ -399,11 +438,11 @@ int main(void)
 	  	          break;
 	  	      }
 
-	  	      if ((TIM4->CNT) > 8000 && EnState != 5) {
+	  	      if (Tim4_Wait_Millis(StartWait_EngineStart_failed, Wait__EngineStart_failed_millis) && EnState != 6) {
 	  	    	start_button = false;
 	  	          EnState = 1;
 	  	      }
-
+#endif
 	 //Motorvezérlés vége
 
     /* USER CODE END WHILE */
@@ -807,9 +846,9 @@ static void MX_TIM4_Init(void)
   htim4.Instance = TIM4;
   htim4.Init.Prescaler = 33600;
   htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim4.Init.Period = 20000;
+  htim4.Init.Period = 60000;
   htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim4) != HAL_OK)
   {
     Error_Handler();
