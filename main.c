@@ -61,7 +61,6 @@ TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
 TIM_HandleTypeDef htim5;
-TIM_HandleTypeDef htim12;
 
 UART_HandleTypeDef huart2;
 
@@ -80,7 +79,6 @@ static void MX_TIM2_Init(void);
 static void MX_TIM4_Init(void);
 static void MX_TIM5_Init(void);
 static void MX_TIM1_Init(void);
-static void MX_TIM12_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_ADC1_Init(void);
 /* USER CODE BEGIN PFP */
@@ -89,7 +87,7 @@ static void MX_ADC1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define FekpadTest
+//#define FekpadTest
 //#define MotorVezerles
 
 //Fékpad változók:
@@ -107,7 +105,7 @@ int ClState=1;
 bool start_button=0;
 
 int32_t nKer=0;				//Kerék szögsebessége
-int32_t nMot=0;               //motor szögsebessége
+int16_t nMot=0;               //motor szögsebessége
 
 #define DKopen 135     //dekompresszor nyitott szöge (aktivált)
 #define DKclosed 90    //dekompresszor zárt szöge (deaktivált)
@@ -183,12 +181,6 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
 	if(GPIO_Pin==GPIO_PIN_6){	//Kikapcsoló gomb
 		start_button=false;
 	}
-	//Motorvezérlés vége
-
-	//Fékpad:
-
-	//Fékpad vége
-
 	//Egyéb
 	/*
 	if (GPIO_Pin == GPIO_PIN_0){	//Blue pushbutton
@@ -196,17 +188,42 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
 		HAL_TIM_Base_Start(&htim4);
 	}*/
 	//Egyéb vége
+
 }
 //Gombok vége =======================================================================================================================================================
 
 //50 ms =======================================================================================================================================================
-int szogem=0;
+//int szogem=0;
+int dologd;
+uint32_t lastRegValTim2=0;
+uint32_t nMot_unsigned_bitmagic;
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim){
 	//Szögsebesség mérés
-	//nMot = ((TIM2->CNT))*1200/1024; //egy fordulat 1024 jelet ad ki magából (256*4), és 50 ms-onként mérünk, de így 1/min-ben kapjuk meg (*1200)
+	/*Dani kód
+	uint32_t Tim2CNT = TIM2->CNT;
+	int32_t Tim2CNT_signed;
+	//Tim2CNT első bitje 1 -> negatív
+	if(Tim2CNT & 0x80000){
+		Tim2CNT_signed = Tim2CNT & 0x7fffffff;
+		Tim2CNT_signed = 0x7fffffff - Tim2CNT_signed;
+	}
+	Dani kód*/
+	nMot = (((TIM2->CNT))*1200)>>10; //egy fordulat 1024 jelet ad ki magából (256*4), és 50 ms-onként mérünk, de így 1/min-ben kapjuk meg (*1200)
 	nKer = ((TIM1->CNT))*1200/1024; //egy fordulat 1024 jelet ad ki magából (256*4), és 50 ms-onként mérünk, de így 1/min-ben kapjuk meg (*1200)
+
+	//nMot=(TIM1->CNT)-lastRegValTim2;
+	//lastRegValTim2=(TIM1->CNT);
+
+	nMot_unsigned_bitmagic = TIM2->CNT;
+
+	if(nMot_unsigned_bitmagic & 0x80000){
+	nMot_unsigned_bitmagic = (((nMot_unsigned_bitmagic * 1200) >> 10) | 0xffc00000);
+	}
+	sprintf(MSG,"nMot:%d\n",nMot_unsigned_bitmagic);
+		HAL_UART_Transmit(&huart2, MSG, sizeof(MSG), 100);
+
 	__HAL_TIM_SET_COUNTER(&htim5, 0);
-	__HAL_TIM_SET_COUNTER(&htim2, 0);
+	//__HAL_TIM_SET_COUNTER(&htim2, 0);
 	__HAL_TIM_SET_COUNTER(&htim1, 0);
 	//Szögsebesség mérés vége
 
@@ -221,6 +238,13 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim){
 	__HAL_TIM_SET_COUNTER(&htim1, 30000);
 	FekapadSzervoFi=FekapadSzervoFi+FekapadSzervoDeltaFi;
 */
+	HAL_ADC_Start(&hadc1);
+	HAL_ADC_PollForConversion(&hadc1, 1000);
+	dologd= HAL_ADC_GetValue(&hadc1);
+	__HAL_TIM_SET_PRESCALER(&htim3, dologd);
+	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 1000);
+
+
 	//Fékpad vége
 }
 //50 ms vége =======================================================================================================================================================
@@ -263,7 +287,6 @@ int main(void)
   MX_TIM4_Init();
   MX_TIM5_Init();
   MX_TIM1_Init();
-  MX_TIM12_Init();
   MX_USART2_UART_Init();
   MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
@@ -277,11 +300,14 @@ int main(void)
 
   //Fekpad:
   HAL_ADC_Start(&hadc1);
+
   //Fékpad vége
 
   HAL_TIM_Base_Start(&htim4);
   HAL_TIM_Base_Start_IT(&htim5);
 
+
+  __HAL_TIM_SET_COUNTER(&htim3, 500);
   //uint32_t StartWait=TIM4->CNT;
   /* USER CODE END 2 */
 
@@ -290,12 +316,8 @@ int main(void)
   while (1)
   {
 	  //Tesztek:
-/*
-	  if(Tim4_Wait_Millis(StartWait, 20000)){
-		  HAL_GPIO_TogglePin(LD5_GPIO_Port, LD5_Pin);
-		  StartWait=TIM4->CNT;
-	  }
-	  */
+
+
 	  //Tesztek vége
 
 	  //Fékpad:
@@ -733,11 +755,11 @@ static void MX_TIM2_Init(void)
   sConfig.IC1Polarity = TIM_ICPOLARITY_FALLING;
   sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC1Filter = 10;
+  sConfig.IC1Filter = 0;
   sConfig.IC2Polarity = TIM_ICPOLARITY_FALLING;
   sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC2Filter = 10;
+  sConfig.IC2Filter = 0;
   if (HAL_TIM_Encoder_Init(&htim2, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -912,44 +934,6 @@ static void MX_TIM5_Init(void)
   /* USER CODE BEGIN TIM5_Init 2 */
 
   /* USER CODE END TIM5_Init 2 */
-
-}
-
-/**
-  * @brief TIM12 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM12_Init(void)
-{
-
-  /* USER CODE BEGIN TIM12_Init 0 */
-
-  /* USER CODE END TIM12_Init 0 */
-
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-
-  /* USER CODE BEGIN TIM12_Init 1 */
-
-  /* USER CODE END TIM12_Init 1 */
-  htim12.Instance = TIM12;
-  htim12.Init.Prescaler = 8400;
-  htim12.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim12.Init.Period = 30000;
-  htim12.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim12.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
-  if (HAL_TIM_Base_Init(&htim12) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim12, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM12_Init 2 */
-
-  /* USER CODE END TIM12_Init 2 */
 
 }
 
