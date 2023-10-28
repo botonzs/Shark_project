@@ -33,12 +33,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-/* Debug Exception and Monitor Control Register base address */
-#define DEMCR                 *((volatile uint32_t*) 0xE000EDFCu)
-
-/* ITM register addresses */
-#define ITM_STIMULUS_PORT0    *((volatile uint32_t*) 0xE0000000u)
-#define ITM_TRACE_EN          *((volatile uint32_t*) 0xE0000E00u)
 
 /* USER CODE END PD */
 
@@ -49,12 +43,7 @@
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
-
-I2C_HandleTypeDef hi2c1;
-
-I2S_HandleTypeDef hi2s3;
-
-SPI_HandleTypeDef hspi1;
+ADC_HandleTypeDef hadc2;
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
@@ -71,16 +60,14 @@ UART_HandleTypeDef huart2;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_I2C1_Init(void);
-static void MX_I2S3_Init(void);
-static void MX_SPI1_Init(void);
-static void MX_TIM3_Init(void);
+static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_TIM3_Init(void);
 static void MX_TIM4_Init(void);
 static void MX_TIM5_Init(void);
-static void MX_TIM1_Init(void);
-static void MX_USART2_UART_Init(void);
 static void MX_ADC1_Init(void);
+static void MX_USART2_UART_Init(void);
+static void MX_ADC2_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -88,7 +75,8 @@ static void MX_ADC1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 //#define FekpadTest
-//#define MotorVezerles
+#define MotorVezerles
+#define KuplungVezerles
 
 //Fékpad változók:
 int fekpadState=1;
@@ -97,10 +85,48 @@ int FekapadSzervoFi=0;
 uint16_t readValue;
 uint8_t MSG[35] = "";
 
-//Motorvezérlés változók:
+//Kuplungvezérlés változók:
+enum ClutchStates
+{
+	Clutch_Open,
+	If,
+	PID,
+	Sailing,
+	Clutch_Closed
+};
+enum ClutchStates ClutchState = Clutch_Open;
 
-int EnState=1;
-int ClState=1;
+
+#define clOpen 40
+#define clClosed 65
+#define clMin 45
+#define clMax 60
+
+
+//PID
+int32_t S=0;	//Integrál értéke
+int32_t P=0;	//P tag értéke
+int32_t I=0;	//I tag értéke
+int32_t D=0;	//D tag értéke
+int32_t kp=100;	//P tag konstansa
+int32_t ki=10;	//I tag konstansa
+int32_t kd=0;	//D tag konstansa
+
+int32_t eMot=0;
+int32_t epszilon=20;	//Elég kis különbség esetén bezárjuk a kuplungot
+int32_t clutchServoAngle=40;
+
+//Motorvezérlés változók:
+enum EngineStates
+{
+	Engine_Stop,
+	Decompressor_Open,
+	Wait_Decompressor_RPM,
+	Wait_Injection_RPM,
+	Injection_Start,
+	Starter_Engine_Stop
+};
+enum EngineStates EngineState = Engine_Stop;
 
 bool start_button=0;
 
@@ -123,14 +149,16 @@ int32_t currentMotPos;        //ebbe a pozícióba állítjuk a motor szervót f
 #define nInd 700      //indítómotor ezen a sebességen áll meg
 #define nMax 3000            //maximum motorsebesség
 #define nVit 400            //ezen a kerék fordulatszámon azt mondjuk hogy már vitorlázunk
+#define nC	1200			//erre a fordulatszámra szabályozza a kuplung a rendszert
+#define nSafe_to_control 800//ez alatt kinyitjuk a kuplungot biztos ami biztos
 
 
-//uint32_t counter=0;
 #define DK_open_wait_millisec 500
 uint32_t StartWait_Dk=0;
 uint32_t StartWait_EngineStart_failed=0;
 uint32_t Wait_Dk_millis=500;
 uint32_t Wait__EngineStart_failed_millis=8000;
+
 
 //Szervó függvények: =======================================================================================================================================================
 #define ServoMin 60
@@ -157,7 +185,7 @@ void Clutch_Servo(int32_t Degree)//kuplung szabályozó szervó beállítása
 }
 //Szevó függvények vége =======================================================================================================================================================
 
-//millis:
+//millis:=======================================================================================================================================================
 // Clock frek= 84MHz, prescale=33600 -> Timer frek= 84MHz/33600 = 2500Hz
 //Autoreload=60k -> 60k/2500=24 sec
 //WaitLength: [ms]
@@ -169,7 +197,7 @@ bool Tim4_Wait_Millis(int32_t StartWait, int32_t WaitLength)
     }
     else return 0;
 }
-//
+//millis vége=======================================================================================================================================================
 
 //Gombok =======================================================================================================================================================
 
@@ -194,20 +222,23 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
 
 //50 ms =======================================================================================================================================================
 //int szogem=0;
-int dologd;
+
 uint32_t lastRegValTim2=0;
 uint32_t nMot_unsigned_bitmagic;
+
+/*
+	uint32_t value15=0;
+  	uint32_t value14=0;
+  	uint32_t value13=0;
+  	uint32_t value12=0;
+  	uint32_t value11=0;
+  	*/
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim){
+	HAL_GPIO_TogglePin(LD5_GPIO_Port, LD5_Pin);
+	HAL_GPIO_TogglePin(LD4_GPIO_Port, LD4_Pin);
+	HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
+
 	//Szögsebesség mérés
-	/*Dani kód
-	uint32_t Tim2CNT = TIM2->CNT;
-	int32_t Tim2CNT_signed;
-	//Tim2CNT első bitje 1 -> negatív
-	if(Tim2CNT & 0x80000){
-		Tim2CNT_signed = Tim2CNT & 0x7fffffff;
-		Tim2CNT_signed = 0x7fffffff - Tim2CNT_signed;
-	}
-	Dani kód*/
 	nMot = (((TIM2->CNT))*1200)>>10; //egy fordulat 1024 jelet ad ki magából (256*4), és 50 ms-onként mérünk, de így 1/min-ben kapjuk meg (*1200)
 	nKer = ((TIM1->CNT))*1200/1024; //egy fordulat 1024 jelet ad ki magából (256*4), és 50 ms-onként mérünk, de így 1/min-ben kapjuk meg (*1200)
 
@@ -219,33 +250,55 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim){
 	if(nMot_unsigned_bitmagic & 0x80000){
 	nMot_unsigned_bitmagic = (((nMot_unsigned_bitmagic * 1200) >> 10) | 0xffc00000);
 	}
-	sprintf(MSG,"nMot:%d\n",nMot_unsigned_bitmagic);
-		HAL_UART_Transmit(&huart2, MSG, sizeof(MSG), 100);
+	//sprintf(MSG,"nMot:%d\n",nMot_unsigned_bitmagic);
+	//HAL_UART_Transmit(&huart2, MSG, sizeof(MSG), 100);
 
 	__HAL_TIM_SET_COUNTER(&htim5, 0);
-	//__HAL_TIM_SET_COUNTER(&htim2, 0);
+	__HAL_TIM_SET_COUNTER(&htim2, 0);
 	__HAL_TIM_SET_COUNTER(&htim1, 0);
 	//Szögsebesség mérés vége
 
 
-	//HAL_GPIO_TogglePin(LD5_GPIO_Port, LD5_Pin);
-	//HAL_GPIO_TogglePin(LD4_GPIO_Port, LD4_Pin);
-	//HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
 
+
+#ifdef FekpadTest
 	//Fékpad:
 /*
 	FekapadSzervoDeltaFi=__HAL_TIM_GET_COUNTER(&htim1)-30000;
 	__HAL_TIM_SET_COUNTER(&htim1, 30000);
 	FekapadSzervoFi=FekapadSzervoFi+FekapadSzervoDeltaFi;
 */
+	/*
+
 	HAL_ADC_Start(&hadc1);
-	HAL_ADC_PollForConversion(&hadc1, 1000);
-	dologd= HAL_ADC_GetValue(&hadc1);
-	__HAL_TIM_SET_PRESCALER(&htim3, dologd);
-	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 1000);
-
-
+		 HAL_ADC_PollForConversion(&hadc1, 1000);
+		 uint32_t value1 = HAL_ADC_GetValue(&hadc1);
+		 value15=value14;
+		 value14=value13;
+		 value13=value12;
+		 value12=value11;
+		 value11=value1;
+		 value1=(value11+value12+value13+value14+value15)/5;
+		 HAL_ADC_Start(&hadc2);
+		 HAL_ADC_PollForConversion(&hadc2, 1000);
+		 uint32_t value2 = HAL_ADC_GetValue(&hadc2);
+		 sprintf(MSG,"nMot:%d\n",(value1));
+			  HAL_UART_Transmit(&huart2, MSG, sizeof(MSG), 100);
+			  */
 	//Fékpad vége
+#endif
+
+#ifdef KuplungVezerles
+	if(clMin+clutchServoAngle>clMin && clMin+clutchServoAngle<clMax){   //Csak akkor számoljuk tovább az integrált, ha a szervók nincsenek szélső helyzetben
+		S=S +(nMot-nC);
+		//S=S+dt*(nMot0-nC);  //kiemelhetünk dt-t és belevihetjük ki-be
+	}
+	P=kp*(nMot-nC);
+	I=ki*S;
+	D=kd*eMot;
+	clutchServoAngle=P+I+D;
+	clutchServoAngle=clutchServoAngle/1000;
+#endif
 }
 //50 ms vége =======================================================================================================================================================
 
@@ -279,43 +332,46 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_I2C1_Init();
-  MX_I2S3_Init();
-  MX_SPI1_Init();
-  MX_TIM3_Init();
+  MX_TIM1_Init();
   MX_TIM2_Init();
+  MX_TIM3_Init();
   MX_TIM4_Init();
   MX_TIM5_Init();
-  MX_TIM1_Init();
-  MX_USART2_UART_Init();
   MX_ADC1_Init();
+  MX_USART2_UART_Init();
+  MX_ADC2_Init();
   /* USER CODE BEGIN 2 */
   //Motorvez:
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
-  HAL_TIM_Encoder_Start_IT(&htim2, TIM_CHANNEL_1);
-  HAL_TIM_Encoder_Start_IT(&htim1, TIM_CHANNEL_1);
+   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+   HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_1);
+   HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_1);
 
-  //Fekpad:
-  HAL_ADC_Start(&hadc1);
+   //Fekpad:
+   HAL_ADC_Start(&hadc1);
+   HAL_ADC_Start(&hadc2);
+   //Fékpad vége
 
-  //Fékpad vége
-
-  HAL_TIM_Base_Start(&htim4);
-  HAL_TIM_Base_Start_IT(&htim5);
+   HAL_TIM_Base_Start(&htim4);
+   HAL_TIM_Base_Start_IT(&htim5);
 
 
-  __HAL_TIM_SET_COUNTER(&htim3, 500);
-  //uint32_t StartWait=TIM4->CNT;
+   __HAL_TIM_SET_COUNTER(&htim3, 500);
+   //uint32_t StartWait=TIM4->CNT;
+
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  //Tesztek:
+	   //Tesztek:
+	 //__HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_4, 1000);
+	  Clutch_Servo(40);
+
 
 
 	  //Tesztek vége
@@ -380,54 +436,54 @@ int main(void)
 	  		  HAL_UART_Transmit(&huart2, MSG, sizeof(MSG), 100);
 
 	  	      if (start_button == false || nMot>nMax) {
-	  	          EnState = 1; //indítás állapotgépe
-	  	          ClState = 1; //kuplung állapotgépe
+	  	          EngineState = Engine_Stop; //indítás állapotgépe
+	  	          ClutchState = Clutch_Open; //kuplung állapotgépe
 	  	      }
 
-	  	      switch (EnState) {
-	  	          case 1: //alapállapot:
+	  	      switch (EngineState) {
+	  	          case Engine_Stop: //alapállapot:
 	  	              Decompressor_Servo(DKclosed); //dekompresszor szelep zárt állapotba áll
 	  	              Injection_Servo(MotPosZero); // ne legyen befecskendezés
 	  	              HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET); //indító motor kikapcsol
 	  	              //->
 	  	              if (start_button == true){//ha a start gombot megnyomjuk
-	  	                  EnState = 2; //dekompresszor szelep nyit
+	  	                  EngineState = Decompressor_Open; //dekompresszor szelep nyit
 	  	                StartWait_Dk=TIM4->CNT;
 	  	                StartWait_EngineStart_failed=TIM4->CNT;
 	  	              }
 	  	          break;
 	  	          //================================================================================
-	  	          case 2: //dekompresszor nyit, indító indul
+	  	          case Decompressor_Open: //dekompresszor nyit
 	  	              Decompressor_Servo(DKopen);
 	  	              Injection_Servo(MotPosZero);
 	  	              //->
 	  	              if (Tim4_Wait_Millis(StartWait_Dk, Wait_Dk_millis)) {//Várunk fél másodpercet
 	  	                  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET); //indító motor bekapcsol
-	  	                  EnState = 3;//Motorpörgésre várunk
+	  	                  EngineState = Wait_Decompressor_RPM;//Motorpörgésre várunk
 	  	              }
 	  	          break;
 	  	          //================================================================================
 
-	  	          case 3: //Megvárjuk hogy az indító felpörgesse a motort
+	  	          case Wait_Decompressor_RPM: //Megvárjuk hogy az indító felpörgesse a motort
 	  	        	  Decompressor_Servo(DKopen);//bezárjuk a dekompresszort
 	  	        	  Injection_Servo(MotPosZero);
 	  	        	  //->
 	  	        	  if (nMot > nDK) { //Megvárjuk, hogy elérjük a befecskendezési fordulatot
-	  	        		  EnState = 4; //Befecskendezés
+	  	        		  EngineState = Wait_Injection_RPM; //Befecskendezés
 	  	        	  }
 	  	          break;
 
 
-	  	          case 4: //Megvárjuk hogy az indító felpörgesse a motort
+	  	          case Wait_Injection_RPM: //Megvárjuk hogy az indító felpörgesse a motort
 	  	              Decompressor_Servo(DKclosed);//bezárjuk a dekompresszort
 	  	              Injection_Servo(MotPosZero);
 	  	              //->
 	  	              if (nMot > nBef) { //Megvárjuk, hogy elérjük a befecskendezési fordulatot
-	  	                  EnState = 5; //Befecskendezés
+	  	                  EngineState = Injection_Start; //Befecskendezés
 	  	              }
 	  	          break;
 	  	          //================================================================================
-	  	          case 5: //elkezdődik a befecskendezés
+	  	          case Injection_Start : //elkezdődik a befecskendezés
 	  	              Decompressor_Servo(DKclosed);
 	  	              for (int ii = 0; ii < sizeof(fi)/sizeof(fi[0]); ii++) {
 	  	                  if (nMot > n[ii] && nMot < n[ii + 1]) {
@@ -439,11 +495,11 @@ int main(void)
 	  	              //->
 	  	              if (nMot > nInd) {
 	  	                  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET); //indító motor kikapcsol
-	  	                  EnState = 6;
+	  	                  EngineState = Starter_Engine_Stop;
 	  	              }
 	  	          break;
 	  	          //================================================================================
-	  	          case 6: //elindult a motor, indító leáll
+	  	          case Starter_Engine_Stop: //elindult a motor, indító leáll
 	  	              Decompressor_Servo(DKclosed);
 	  	              for (int i = 0; i < sizeof(fi) / sizeof(fi[0]); i++) {
 	  	                  if (nMot > n[i] && nMot < n[i + 1]) {
@@ -454,18 +510,74 @@ int main(void)
 	  	              Injection_Servo(currentMotPos);
 	  	              //->
 	  	              if (nMot < nV) {
-	  	                  EnState = 1;
+	  	                  EngineState = Engine_Stop;
 	  	                start_button = false;
 	  	              }
 	  	          break;
 	  	      }
 
-	  	      if (Tim4_Wait_Millis(StartWait_EngineStart_failed, Wait__EngineStart_failed_millis) && EnState != 6) {
+	  	      if (Tim4_Wait_Millis(StartWait_EngineStart_failed, Wait__EngineStart_failed_millis) && EngineState != Starter_Engine_Stop) {
 	  	    	start_button = false;
-	  	          EnState = 1;
+	  	        EngineState = Engine_Stop;
+	  	        ClutchState = Clutch_Open;
 	  	      }
 #endif
 	 //Motorvezérlés vége
+
+#ifdef KuplungVezerles
+	  	    switch (ClutchState) {
+	  	      case Clutch_Open: //Clutch open
+	  	    	Clutch_Servo(clOpen);
+
+	  	        S = 0;
+
+	  	        //->
+	  	        if(start_button == true){
+	  	        	ClutchState=If;
+	  	        }
+	  	        break;
+	  	    //================================================================================
+	  	      case If: //if
+	  	        if(nKer<nMot){
+	  	            ClutchState = PID;
+	  	        }
+	  	        else{
+	  	        	ClutchState = Sailing;
+	  	        }
+	  	        break;
+	  	    //================================================================================
+	  	      case PID: //Csúsztatás
+	  	    	if(nMot>nSafe_to_control){
+	  	    		ClutchState = Clutch_Open;
+
+	  	    		if(clMin+clutchServoAngle>clMin && clMin+clutchServoAngle<clMax){   //Csak akkor változtatjuk a szervók állását, ha az nem mozgatja ki őket a szélső értéken
+	  	    			Clutch_Servo(clMin+clutchServoAngle);
+	  	            }
+	  	    	}
+	  	    	else Clutch_Servo(clOpen);
+	  	            //->
+	  	            //Ha a szabályzó véletlen lefullasztaná a motort:
+
+	  	            if(nMot-nKer<epszilon){
+	  	            	ClutchState = Clutch_Closed;
+	  	            }
+	  	        break;
+	  	    //================================================================================
+	  	      case Sailing: //Vitorlázás
+	  	    	Clutch_Servo(clOpen);
+
+	  	        //->
+	  	        if(nMot>=nKer){
+	  	        	ClutchState = Clutch_Closed;
+	  	        }
+	  	        break;
+	  	    //================================================================================
+	  	      case Clutch_Closed: //Clutch closed
+	  	        Clutch_Servo(clClosed);
+	  	        break;
+	  	      }
+
+#endif
 
     /* USER CODE END WHILE */
 
@@ -543,7 +655,7 @@ static void MX_ADC1_Init(void)
   hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
   hadc1.Init.Resolution = ADC_RESOLUTION_12B;
   hadc1.Init.ScanConvMode = DISABLE;
-  hadc1.Init.ContinuousConvMode = ENABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
   hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
@@ -572,108 +684,54 @@ static void MX_ADC1_Init(void)
 }
 
 /**
-  * @brief I2C1 Initialization Function
+  * @brief ADC2 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_I2C1_Init(void)
+static void MX_ADC2_Init(void)
 {
 
-  /* USER CODE BEGIN I2C1_Init 0 */
+  /* USER CODE BEGIN ADC2_Init 0 */
 
-  /* USER CODE END I2C1_Init 0 */
+  /* USER CODE END ADC2_Init 0 */
 
-  /* USER CODE BEGIN I2C1_Init 1 */
+  ADC_ChannelConfTypeDef sConfig = {0};
 
-  /* USER CODE END I2C1_Init 1 */
-  hi2c1.Instance = I2C1;
-  hi2c1.Init.ClockSpeed = 100000;
-  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
-  hi2c1.Init.OwnAddress1 = 0;
-  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  hi2c1.Init.OwnAddress2 = 0;
-  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN I2C1_Init 2 */
+  /* USER CODE BEGIN ADC2_Init 1 */
 
-  /* USER CODE END I2C1_Init 2 */
+  /* USER CODE END ADC2_Init 1 */
 
-}
-
-/**
-  * @brief I2S3 Initialization Function
-  * @param None
-  * @retval None
+  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
   */
-static void MX_I2S3_Init(void)
-{
-
-  /* USER CODE BEGIN I2S3_Init 0 */
-
-  /* USER CODE END I2S3_Init 0 */
-
-  /* USER CODE BEGIN I2S3_Init 1 */
-
-  /* USER CODE END I2S3_Init 1 */
-  hi2s3.Instance = SPI3;
-  hi2s3.Init.Mode = I2S_MODE_MASTER_TX;
-  hi2s3.Init.Standard = I2S_STANDARD_PHILIPS;
-  hi2s3.Init.DataFormat = I2S_DATAFORMAT_16B;
-  hi2s3.Init.MCLKOutput = I2S_MCLKOUTPUT_ENABLE;
-  hi2s3.Init.AudioFreq = I2S_AUDIOFREQ_8K;
-  hi2s3.Init.CPOL = I2S_CPOL_LOW;
-  hi2s3.Init.ClockSource = I2S_CLOCK_PLL;
-  hi2s3.Init.FullDuplexMode = I2S_FULLDUPLEXMODE_DISABLE;
-  if (HAL_I2S_Init(&hi2s3) != HAL_OK)
+  hadc2.Instance = ADC2;
+  hadc2.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
+  hadc2.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc2.Init.ScanConvMode = DISABLE;
+  hadc2.Init.ContinuousConvMode = DISABLE;
+  hadc2.Init.DiscontinuousConvMode = DISABLE;
+  hadc2.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc2.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc2.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc2.Init.NbrOfConversion = 1;
+  hadc2.Init.DMAContinuousRequests = DISABLE;
+  hadc2.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  if (HAL_ADC_Init(&hadc2) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN I2S3_Init 2 */
 
-  /* USER CODE END I2S3_Init 2 */
-
-}
-
-/**
-  * @brief SPI1 Initialization Function
-  * @param None
-  * @retval None
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
   */
-static void MX_SPI1_Init(void)
-{
-
-  /* USER CODE BEGIN SPI1_Init 0 */
-
-  /* USER CODE END SPI1_Init 0 */
-
-  /* USER CODE BEGIN SPI1_Init 1 */
-
-  /* USER CODE END SPI1_Init 1 */
-  /* SPI1 parameter configuration*/
-  hspi1.Instance = SPI1;
-  hspi1.Init.Mode = SPI_MODE_MASTER;
-  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
-  hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
-  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
-  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
-  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-  hspi1.Init.CRCPolynomial = 10;
-  if (HAL_SPI_Init(&hspi1) != HAL_OK)
+  sConfig.Channel = ADC_CHANNEL_8;
+  sConfig.Rank = 1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
+  if (HAL_ADC_ConfigChannel(&hadc2, &sConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN SPI1_Init 2 */
+  /* USER CODE BEGIN ADC2_Init 2 */
 
-  /* USER CODE END SPI1_Init 2 */
+  /* USER CODE END ADC2_Init 2 */
 
 }
 
@@ -703,14 +761,14 @@ static void MX_TIM1_Init(void)
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
-  sConfig.IC1Polarity = TIM_ICPOLARITY_FALLING;
+  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC1Filter = 10;
-  sConfig.IC2Polarity = TIM_ICPOLARITY_FALLING;
+  sConfig.IC1Filter = 0;
+  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
-  sConfig.IC2Filter = 10;
+  sConfig.IC2Filter = 0;
   if (HAL_TIM_Encoder_Init(&htim1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -750,13 +808,13 @@ static void MX_TIM2_Init(void)
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 4294967295;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
-  sConfig.IC1Polarity = TIM_ICPOLARITY_FALLING;
+  sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
   sConfig.IC1Filter = 0;
-  sConfig.IC2Polarity = TIM_ICPOLARITY_FALLING;
+  sConfig.IC2Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
   sConfig.IC2Filter = 0;
@@ -911,9 +969,9 @@ static void MX_TIM5_Init(void)
 
   /* USER CODE END TIM5_Init 1 */
   htim5.Instance = TIM5;
-  htim5.Init.Prescaler = 420;
+  htim5.Init.Prescaler = 8400;
   htim5.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim5.Init.Period = 10000;
+  htim5.Init.Period = 500;
   htim5.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim5.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim5) != HAL_OK)
@@ -996,7 +1054,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(OTG_FS_PowerSwitchOn_GPIO_Port, OTG_FS_PowerSwitchOn_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOD, LD4_Pin|LD3_Pin|LD5_Pin|LD6_InditoMotor_Pin
+  HAL_GPIO_WritePin(GPIOD, LD4_Pin|LD3_Pin|LD5_Pin|LD6_Pin
                           |Audio_RST_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : PE3 */
@@ -1033,6 +1091,22 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : I2S3_WS_Pin */
+  GPIO_InitStruct.Pin = I2S3_WS_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF6_SPI3;
+  HAL_GPIO_Init(I2S3_WS_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : SPI1_SCK_Pin SPI1_MISO_Pin SPI1_MOSI_Pin */
+  GPIO_InitStruct.Pin = SPI1_SCK_Pin|SPI1_MISO_Pin|SPI1_MOSI_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF5_SPI1;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
   /*Configure GPIO pin : PB2 */
   GPIO_InitStruct.Pin = GPIO_PIN_2;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
@@ -1047,14 +1121,22 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF5_SPI2;
   HAL_GPIO_Init(CLK_IN_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LD4_Pin LD3_Pin LD5_Pin LD6_InditoMotor_Pin
+  /*Configure GPIO pins : LD4_Pin LD3_Pin LD5_Pin LD6_Pin
                            Audio_RST_Pin */
-  GPIO_InitStruct.Pin = LD4_Pin|LD3_Pin|LD5_Pin|LD6_InditoMotor_Pin
+  GPIO_InitStruct.Pin = LD4_Pin|LD3_Pin|LD5_Pin|LD6_Pin
                           |Audio_RST_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : I2S3_MCK_Pin I2S3_SCK_Pin I2S3_SD_Pin */
+  GPIO_InitStruct.Pin = I2S3_MCK_Pin|I2S3_SCK_Pin|I2S3_SD_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF6_SPI3;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : VBUS_FS_Pin */
   GPIO_InitStruct.Pin = VBUS_FS_Pin;
@@ -1075,6 +1157,14 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(OTG_FS_OverCurrent_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : Audio_SCL_Pin Audio_SDA_Pin */
+  GPIO_InitStruct.Pin = Audio_SCL_Pin|Audio_SDA_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pin : MEMS_INT2_Pin */
   GPIO_InitStruct.Pin = MEMS_INT2_Pin;
