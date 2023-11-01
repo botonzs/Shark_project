@@ -97,10 +97,10 @@ enum ClutchStates
 enum ClutchStates ClutchState = Clutch_Open;
 
 
-#define clOpen 40
-#define clClosed 65
-#define clMin 45
-#define clMax 60
+#define clutch_Open 40		//A kuplung teljesen kinyitott állapota
+#define clutch_Closed 65	//A kuplung teljesen bezárt állapota
+#define clutch_Min 45		//A kuplung csúsztatásnál a minimum szög ami alá nem vezéreljük
+#define clutch_Max 60		//A kuplung csúsztatásnál a maximum szög ami felé nem vezéreljük
 
 
 //PID
@@ -112,9 +112,9 @@ int32_t kp=100;	//P tag konstansa
 int32_t ki=10;	//I tag konstansa
 int32_t kd=0;	//D tag konstansa
 
-int32_t eMot=0;
-int32_t epszilon=20;	//Elég kis különbség esetén bezárjuk a kuplungot
-int32_t clutchServoAngle=40;
+int32_t eMot=0;					//Motor szöggyorsulása
+int32_t epszilon=20;			//Elég kis különbség esetén bezárjuk a kuplungot
+int32_t clutchServoAngle=40;	//PID esetén ezt a szöget írjuk a kuplung szervókra
 
 //Motorvezérlés változók:
 enum EngineStates
@@ -131,7 +131,7 @@ enum EngineStates EngineState = Engine_Stop;
 bool start_button=0;
 
 int32_t nKer=0;				//Kerék szögsebessége
-int16_t nMot=0;               //motor szögsebessége
+int32_t nMot=0;               //motor szögsebessége
 
 #define DKopen 135     //dekompresszor nyitott szöge (aktivált)
 #define DKclosed 90    //dekompresszor zárt szöge (deaktivált)
@@ -140,24 +140,23 @@ int16_t nMot=0;               //motor szögsebessége
 //Befecskendezés:
 const int32_t n[17]={0,150,1100,1200,1300,1400,1500,1600,1700,1800,1900,2000,2100,2200,2400,2600,10000};
 const int32_t fi[16]={80,130,126,123,118,117,116,115,114,113,112,111,109,106,103,80};
-int32_t currentMotPos;        //ebbe a pozícióba állítjuk a motor szervót futás közben
+int32_t currentMotPos;        	//ebbe a pozícióba állítjuk a motor szervót futás közben
 
 //Fordulatszámok:
-#define nV 300        //vész szögsebesség, ha beesik futás közben a motor ez alá akkor leállítjuk
-#define nDK 100        //dekompresszort ezen a sebességen zárjuk be megint
-#define nBef 200       //befecskendezés ezen a fordulatszámon indul el
-#define nInd 700      //indítómotor ezen a sebességen áll meg
-#define nMax 3000            //maximum motorsebesség
-#define nVit 400            //ezen a kerék fordulatszámon azt mondjuk hogy már vitorlázunk
-#define nC	1200			//erre a fordulatszámra szabályozza a kuplung a rendszert
-#define nSafe_to_control 800//ez alatt kinyitjuk a kuplungot biztos ami biztos
+#define nV 300        			//vész szögsebesség, ha beesik futás közben a motor ez alá akkor leállítjuk
+#define nDK 100        			//dekompresszort ezen a sebességen zárjuk be megint
+#define nBef 200       			//befecskendezés ezen a fordulatszámon indul el
+#define nInd 700      			//indítómotor ezen a sebességen áll meg
+#define nMax 3000          		//maximum motorsebesség
+#define nVit 400            	//ezen a kerék fordulatszámon azt mondjuk hogy már vitorlázunk
+#define nC	1200				//erre a fordulatszámra szabályozza a kuplung a rendszert
+#define nSafe_to_control 800	//ez alatt kinyitjuk a kuplungot biztos ami biztos
 
-
-#define DK_open_wait_millisec 500
-uint32_t StartWait_Dk=0;
-uint32_t StartWait_EngineStart_failed=0;
-uint32_t Wait_Dk_millis=500;
-uint32_t Wait__EngineStart_failed_millis=8000;
+//Időzítők:
+uint32_t StartWait_Dk=0;						//Dekompresszor nyitásának kezdete
+uint32_t StartWait_EngineStart_failed=0;		//Motor indítás sikertelen, ha nyolc másodperc alatt nem történik meg
+uint32_t Wait_Dk_millis=500;					//Dekompresszor nyitásának ideje
+uint32_t Wait__EngineStart_failed_millis=8000;	//Motor indítás nyolc másodperce
 
 
 //Szervó függvények: =======================================================================================================================================================
@@ -200,7 +199,6 @@ bool Tim4_Wait_Millis(int32_t StartWait, int32_t WaitLength)
 //millis vége=======================================================================================================================================================
 
 //Gombok =======================================================================================================================================================
-
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
 	//Motorvezérlés:
 	if(GPIO_Pin==GPIO_PIN_4){	//Bekapcsoló gomb
@@ -209,30 +207,11 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
 	if(GPIO_Pin==GPIO_PIN_6){	//Kikapcsoló gomb
 		start_button=false;
 	}
-	//Egyéb
-	/*
-	if (GPIO_Pin == GPIO_PIN_0){	//Blue pushbutton
-		__HAL_TIM_SET_COUNTER(&htim4, 0);
-		HAL_TIM_Base_Start(&htim4);
-	}*/
-	//Egyéb vége
-
 }
 //Gombok vége =======================================================================================================================================================
 
 //50 ms =======================================================================================================================================================
-//int szogem=0;
-
-uint32_t lastRegValTim2=0;
 uint32_t nMot_unsigned_bitmagic;
-
-/*
-	uint32_t value15=0;
-  	uint32_t value14=0;
-  	uint32_t value13=0;
-  	uint32_t value12=0;
-  	uint32_t value11=0;
-  	*/
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim){
 	HAL_GPIO_TogglePin(LD5_GPIO_Port, LD5_Pin);
 	HAL_GPIO_TogglePin(LD4_GPIO_Port, LD4_Pin);
@@ -242,54 +221,27 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim){
 	nMot = (((TIM2->CNT))*1200)>>10; //egy fordulat 1024 jelet ad ki magából (256*4), és 50 ms-onként mérünk, de így 1/min-ben kapjuk meg (*1200)
 	nKer = ((TIM1->CNT))*1200/1024; //egy fordulat 1024 jelet ad ki magából (256*4), és 50 ms-onként mérünk, de így 1/min-ben kapjuk meg (*1200)
 
-	//nMot=(TIM1->CNT)-lastRegValTim2;
-	//lastRegValTim2=(TIM1->CNT);
-
 	nMot_unsigned_bitmagic = TIM2->CNT;
-
 	if(nMot_unsigned_bitmagic & 0x80000){
 	nMot_unsigned_bitmagic = (((nMot_unsigned_bitmagic * 1200) >> 10) | 0xffc00000);
 	}
-	//sprintf(MSG,"nMot:%d\n",nMot_unsigned_bitmagic);
-	//HAL_UART_Transmit(&huart2, MSG, sizeof(MSG), 100);
+	nMot=nMot_unsigned_bitmagic;
 
 	__HAL_TIM_SET_COUNTER(&htim5, 0);
 	__HAL_TIM_SET_COUNTER(&htim2, 0);
 	__HAL_TIM_SET_COUNTER(&htim1, 0);
+
+	//sprintf(MSG,"nMot:%d\n",nMot_unsigned_bitmagic);
+	//HAL_UART_Transmit(&huart2, MSG, sizeof(MSG), 100);
+
 	//Szögsebesség mérés vége
 
-
-
-
 #ifdef FekpadTest
-	//Fékpad:
-/*
-	FekapadSzervoDeltaFi=__HAL_TIM_GET_COUNTER(&htim1)-30000;
-	__HAL_TIM_SET_COUNTER(&htim1, 30000);
-	FekapadSzervoFi=FekapadSzervoFi+FekapadSzervoDeltaFi;
-*/
-	/*
 
-	HAL_ADC_Start(&hadc1);
-		 HAL_ADC_PollForConversion(&hadc1, 1000);
-		 uint32_t value1 = HAL_ADC_GetValue(&hadc1);
-		 value15=value14;
-		 value14=value13;
-		 value13=value12;
-		 value12=value11;
-		 value11=value1;
-		 value1=(value11+value12+value13+value14+value15)/5;
-		 HAL_ADC_Start(&hadc2);
-		 HAL_ADC_PollForConversion(&hadc2, 1000);
-		 uint32_t value2 = HAL_ADC_GetValue(&hadc2);
-		 sprintf(MSG,"nMot:%d\n",(value1));
-			  HAL_UART_Transmit(&huart2, MSG, sizeof(MSG), 100);
-			  */
-	//Fékpad vége
 #endif
 
 #ifdef KuplungVezerles
-	if(clMin+clutchServoAngle>clMin && clMin+clutchServoAngle<clMax){   //Csak akkor számoljuk tovább az integrált, ha a szervók nincsenek szélső helyzetben
+	if(clutch_Min+clutchServoAngle>clutch_Min && clutch_Min+clutchServoAngle<clutch_Max){   //Csak akkor számoljuk tovább az integrált, ha a szervók nincsenek szélső helyzetben
 		S=S +(nMot-nC);
 		//S=S+dt*(nMot0-nC);  //kiemelhetünk dt-t és belevihetjük ki-be
 	}
@@ -370,9 +322,7 @@ int main(void)
   {
 	   //Tesztek:
 	 //__HAL_TIM_SET_COMPARE(&htim3,TIM_CHANNEL_4, 1000);
-	  Clutch_Servo(40);
-
-
+	  //Clutch_Servo(40);
 
 	  //Tesztek vége
 
@@ -429,11 +379,11 @@ int main(void)
 #ifdef MotorVezerles
 	  //A tényleges állapotgép:
 	  	          //->
-	  	  HAL_ADC_Start(&hadc1);
-	  	  HAL_ADC_PollForConversion(&hadc1, 1000);
-	  	  nMot = HAL_ADC_GetValue(&hadc1);
-	  	  sprintf(MSG,"nMot:%d\n",nMot);
-	  		  HAL_UART_Transmit(&huart2, MSG, sizeof(MSG), 100);
+	  //HAL_ADC_Start(&hadc1);
+	  //HAL_ADC_PollForConversion(&hadc1, 1000);
+	  //nMot = HAL_ADC_GetValue(&hadc1);
+	  //sprintf(MSG,"nMot:%d\n",nMot);
+	  //HAL_UART_Transmit(&huart2, MSG, sizeof(MSG), 100);
 
 	  	      if (start_button == false || nMot>nMax) {
 	  	          EngineState = Engine_Stop; //indítás állapotgépe
@@ -442,12 +392,12 @@ int main(void)
 
 	  	      switch (EngineState) {
 	  	          case Engine_Stop: //alapállapot:
-	  	              Decompressor_Servo(DKclosed); //dekompresszor szelep zárt állapotba áll
-	  	              Injection_Servo(MotPosZero); // ne legyen befecskendezés
-	  	              HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET); //indító motor kikapcsol
+	  	              Decompressor_Servo(DKclosed); 							//dekompresszor szelep zárt állapotba áll
+	  	              Injection_Servo(MotPosZero); 								// ne legyen befecskendezés
+	  	              HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET); 	//indító motor kikapcsol
 	  	              //->
-	  	              if (start_button == true){//ha a start gombot megnyomjuk
-	  	                  EngineState = Decompressor_Open; //dekompresszor szelep nyit
+	  	              if (start_button == true){								//ha a start gombot megnyomjuk
+	  	                EngineState = Decompressor_Open; 						//dekompresszor szelep nyit
 	  	                StartWait_Dk=TIM4->CNT;
 	  	                StartWait_EngineStart_failed=TIM4->CNT;
 	  	              }
@@ -457,29 +407,29 @@ int main(void)
 	  	              Decompressor_Servo(DKopen);
 	  	              Injection_Servo(MotPosZero);
 	  	              //->
-	  	              if (Tim4_Wait_Millis(StartWait_Dk, Wait_Dk_millis)) {//Várunk fél másodpercet
-	  	                  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET); //indító motor bekapcsol
-	  	                  EngineState = Wait_Decompressor_RPM;//Motorpörgésre várunk
+	  	              if (Tim4_Wait_Millis(StartWait_Dk, Wait_Dk_millis)) {		//Várunk fél másodpercet hogy kinyisson a dekompresszor
+	  	                  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET); 	//indító motor bekapcsol
+	  	                  EngineState = Wait_Decompressor_RPM;					//Motorpörgésre várunk
 	  	              }
 	  	          break;
 	  	          //================================================================================
 
 	  	          case Wait_Decompressor_RPM: //Megvárjuk hogy az indító felpörgesse a motort
-	  	        	  Decompressor_Servo(DKopen);//bezárjuk a dekompresszort
+	  	        	  Decompressor_Servo(DKopen);				//bezárjuk a dekompresszort
 	  	        	  Injection_Servo(MotPosZero);
 	  	        	  //->
-	  	        	  if (nMot > nDK) { //Megvárjuk, hogy elérjük a befecskendezési fordulatot
-	  	        		  EngineState = Wait_Injection_RPM; //Befecskendezés
+	  	        	  if (nMot > nDK) { 						//Megvárjuk, hogy elérjük a befecskendezési fordulatot
+	  	        		  EngineState = Wait_Injection_RPM; 	//Befecskendezés
 	  	        	  }
 	  	          break;
 
 
 	  	          case Wait_Injection_RPM: //Megvárjuk hogy az indító felpörgesse a motort
-	  	              Decompressor_Servo(DKclosed);//bezárjuk a dekompresszort
+	  	              Decompressor_Servo(DKclosed);				//bezárjuk a dekompresszort
 	  	              Injection_Servo(MotPosZero);
 	  	              //->
-	  	              if (nMot > nBef) { //Megvárjuk, hogy elérjük a befecskendezési fordulatot
-	  	                  EngineState = Injection_Start; //Befecskendezés
+	  	              if (nMot > nBef) { 						//Megvárjuk, hogy elérjük a befecskendezési fordulatot
+	  	                  EngineState = Injection_Start; 		//Befecskendezés
 	  	              }
 	  	          break;
 	  	          //================================================================================
@@ -489,9 +439,9 @@ int main(void)
 	  	                  if (nMot > n[ii] && nMot < n[ii + 1]) {
 	  	                      currentMotPos = fi[ii];
 	  	                  }
-	  	                  Injection_Servo(currentMotPos);
+
 	  	              }
-	  	              Injection_Servo(currentMotPos);//biztonság kedvéért
+	  	              Injection_Servo(currentMotPos);					//Befecskendezőt beállítjuk
 	  	              //->
 	  	              if (nMot > nInd) {
 	  	                  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET); //indító motor kikapcsol
@@ -527,9 +477,9 @@ int main(void)
 #ifdef KuplungVezerles
 	  	    switch (ClutchState) {
 	  	      case Clutch_Open: //Clutch open
-	  	    	Clutch_Servo(clOpen);
+	  	    	Clutch_Servo(clutch_Open);
 
-	  	        S = 0;
+	  	        S = 0;		//Az integrált reseteljük a PID-ben
 
 	  	        //->
 	  	        if(start_button == true){
@@ -547,24 +497,23 @@ int main(void)
 	  	        break;
 	  	    //================================================================================
 	  	      case PID: //Csúsztatás
-	  	    	if(nMot>nSafe_to_control){
+	  	    	if(nMot>nSafe_to_control){//Ha túlságosan lemegy a motorfordulatszám, akkor kinyitjuk a kuplungot
 	  	    		ClutchState = Clutch_Open;
 
-	  	    		if(clMin+clutchServoAngle>clMin && clMin+clutchServoAngle<clMax){   //Csak akkor változtatjuk a szervók állását, ha az nem mozgatja ki őket a szélső értéken
-	  	    			Clutch_Servo(clMin+clutchServoAngle);
+	  	    		if(clutch_Min+clutchServoAngle>clutch_Min && clutch_Min+clutchServoAngle<clutch_Max){   //Csak akkor változtatjuk a szervók állását, ha az nem mozgatja ki őket a szélső értéken
+	  	    			Clutch_Servo(clutch_Min+clutchServoAngle);//A PID kiszámolt értékét ráírjuk a kuplung szervókra
 	  	            }
 	  	    	}
-	  	    	else Clutch_Servo(clOpen);
-	  	            //->
-	  	            //Ha a szabályzó véletlen lefullasztaná a motort:
+	  	    	else Clutch_Servo(clutch_Open);//Kinyitjuk a kuplungot, mert túl alacsony a motor fordulatszáma
 
+	  	            //->
 	  	            if(nMot-nKer<epszilon){
 	  	            	ClutchState = Clutch_Closed;
 	  	            }
 	  	        break;
 	  	    //================================================================================
 	  	      case Sailing: //Vitorlázás
-	  	    	Clutch_Servo(clOpen);
+	  	    	Clutch_Servo(clutch_Open);
 
 	  	        //->
 	  	        if(nMot>=nKer){
@@ -573,7 +522,7 @@ int main(void)
 	  	        break;
 	  	    //================================================================================
 	  	      case Clutch_Closed: //Clutch closed
-	  	        Clutch_Servo(clClosed);
+	  	        Clutch_Servo(clutch_Closed);
 	  	        break;
 	  	      }
 
