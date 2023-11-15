@@ -74,7 +74,7 @@ static void MX_ADC2_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-//#define FekpadTest
+#define FekpadTest
 #define MotorVezerles
 #define KuplungVezerles
 
@@ -217,6 +217,12 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim){
 	HAL_GPIO_TogglePin(LD4_GPIO_Port, LD4_Pin);
 	HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
 
+	HAL_ADC_Start(&hadc1);
+	HAL_ADC_PollForConversion(&hadc1, 1000);
+	uint32_t value = HAL_ADC_GetValue(&hadc1);
+	sprintf(MSG,"T:%d\n",value);
+	HAL_UART_Transmit(&huart2, MSG, sizeof(MSG), 100);
+
 	//Szögsebesség mérés
 	nMot = (((TIM2->CNT))*1200)>>10; //egy fordulat 1024 jelet ad ki magából (256*4), és 50 ms-onként mérünk, de így 1/min-ben kapjuk meg (*1200)
 	nKer = ((TIM1->CNT))*1200/1024; //egy fordulat 1024 jelet ad ki magából (256*4), és 50 ms-onként mérünk, de így 1/min-ben kapjuk meg (*1200)
@@ -237,7 +243,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim){
 	//Szögsebesség mérés vége
 
 #ifdef FekpadTest
-
+	sprintf(MSG,"szog: %d fordulatszám: %d\n",value,nMot_unsigned_bitmagic);
+	HAL_UART_Transmit(&huart2, MSG, sizeof(MSG), 100); //Sorosan kiküldjük a szervo szögét és a motor szögsebességét
 #endif
 
 #ifdef KuplungVezerles
@@ -309,11 +316,7 @@ int main(void)
    HAL_TIM_Base_Start(&htim4);
    HAL_TIM_Base_Start_IT(&htim5);
 
-
    __HAL_TIM_SET_COUNTER(&htim3, 500);
-   //uint32_t StartWait=TIM4->CNT;
-
-
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -328,50 +331,33 @@ int main(void)
 
 	  //Fékpad:
 #ifdef FekpadTest
+	  //Fékpad Működése:
+	  //Egy potméterrel lehet állítani a befecskendező állását
+	  //A "bekapcsológombot" lenyomva tartva elindul az indítómotor
+	  //A "bekapcsológombot" elengedve leáll az indítómotor
+	  //A "kikapcsológombot" lenyomva tartva kinyitott állapotba áll a dekompresszor szervó
+	  //A "kikapcsológombot" elengedve bezárt állapotba áll a dekompresszor szervó
+
 	  HAL_ADC_Start(&hadc1);
 	  HAL_ADC_PollForConversion(&hadc1, 1000);
 	  uint32_t value = HAL_ADC_GetValue(&hadc1);
 	  value=(int)value*0.043945;
 
-	  //Decompressor_Servo(value);
-	  //Clutch_Servo(value);
-	  Injection_Servo(value);
-	  sprintf(MSG,"szog:%d\n",value);
-	  HAL_UART_Transmit(&huart2, MSG, sizeof(MSG), 100);
+	  Injection_Servo(value); //A poti értékére beállítjuk a befecskendező szervot
 
-	  if(start_button==false)fekpadState=1;
-	  switch(fekpadState){
-	  case 1:
-
-		  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET);
-	  	  Decompressor_Servo(180);
-	  	  if(start_button==true){
-	  		  fekpadState=2;
-	  		StartWait_Dk=TIM4->CNT;
-	  	  }
-	  break;
-	  case 2:
-		  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET);
-		  Decompressor_Servo(90);
-	  	  if(Tim4_Wait_Millis(StartWait_Dk, Wait_Dk_millis)){
-	  		fekpadState=3;
-	  		StartWait_Dk=TIM4->CNT;
-	  	  }
-	  break;
-	  case 3:
-		  Decompressor_Servo(90);
-	  	  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);
-	  	  if(Tim4_Wait_Millis(StartWait_Dk, Wait_Dk_millis)){
-	  	  		fekpadState=4;
-	  	  }
-	  break;
-	  case 4:
-	  	  Decompressor_Servo(180);
-	  	  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);
-	  	  HAL_Delay(500);
-	  	  fekpadState=4;
-	  break;
+	  if(HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_4)){ //Bekapcsol gombot nyomva tartva elindul az indítómotor
+		  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);
 	  }
+	  else{
+		  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET);
+	  }
+	  if(HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_6)){//Kikapcsológombot nyomva tartva kinyílik a dekompresszor
+		  Decompressor_Servo(DKopen);
+	  }
+	  else{
+		  Decompressor_Servo(DKclosed);
+	  }
+
 #endif
 	 //Fékpad vége
 
@@ -1003,8 +989,8 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(OTG_FS_PowerSwitchOn_GPIO_Port, OTG_FS_PowerSwitchOn_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOD, LD4_Pin|LD3_Pin|LD5_Pin|LD6_Pin
-                          |Audio_RST_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOD, S0_demux_Pin|S1_demux_Pin|S2_demux_Pin|LD4_Pin
+                          |LD3_Pin|LD5_Pin|LD6_Indito_Motor_Pin|Audio_RST_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : PE3 */
   GPIO_InitStruct.Pin = GPIO_PIN_3;
@@ -1070,10 +1056,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF5_SPI2;
   HAL_GPIO_Init(CLK_IN_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LD4_Pin LD3_Pin LD5_Pin LD6_Pin
-                           Audio_RST_Pin */
-  GPIO_InitStruct.Pin = LD4_Pin|LD3_Pin|LD5_Pin|LD6_Pin
-                          |Audio_RST_Pin;
+  /*Configure GPIO pins : S0_demux_Pin S1_demux_Pin S2_demux_Pin LD4_Pin
+                           LD3_Pin LD5_Pin LD6_Indito_Motor_Pin Audio_RST_Pin */
+  GPIO_InitStruct.Pin = S0_demux_Pin|S1_demux_Pin|S2_demux_Pin|LD4_Pin
+                          |LD3_Pin|LD5_Pin|LD6_Indito_Motor_Pin|Audio_RST_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
